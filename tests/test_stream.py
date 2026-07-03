@@ -364,3 +364,32 @@ async def test_reacquire_within_grace_cancels_teardown(
     assert jpeg.startswith(b"\xff\xd8")
     await client.async_shutdown()
     await _wait_for(lambda: pc.closed)
+
+
+async def test_stale_idle_stop_does_not_kill_regranted_session(
+    signalling_server, http_session
+) -> None:
+    """A fired-but-not-yet-run idle teardown must not survive a re-arm."""
+    _, port = signalling_server
+    pc = FakePeerConnection()
+    client = _make_client(port, http_session, pc, idle_timeout=0.2)
+    await client.acquire()
+    await pc.track.queue.put(make_frame())
+    await client.async_get_image(timeout=5)
+
+    await client.release()  # arms a timer (generation bumped)
+    await client.acquire()  # re-earn the session (generation bumped again)
+    await client._idle_stop(0)  # stale generation: must be a no-op
+    assert not pc.closed
+    jpeg = await client.async_get_image(timeout=5)
+    assert jpeg.startswith(b"\xff\xd8")
+
+    # The dangerous interleaving: a fresh timer armed at consumers == 0
+    # while a stale fired-but-not-yet-run task finally gets the lock.
+    # Without the generation check it would stop the session right away,
+    # cutting the fresh grace period short.
+    await client.release()  # arms a fresh timer (generation bumped)
+    await client._idle_stop(client._idle_generation - 1)  # stale task runs
+    assert not pc.closed  # fresh grace period intact
+    await client.async_shutdown()
+    await _wait_for(lambda: pc.closed)

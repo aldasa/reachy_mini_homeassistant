@@ -118,6 +118,11 @@ class ReachyMiniStreamClient:
         self._consumers = 0
         self._task: asyncio.Task | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
+        # Cancelling the handle alone is not enough: a timer that has
+        # already fired has queued an _idle_stop task that can outlive
+        # a re-arm and stop the fresh session. Every cancel/re-arm bumps
+        # the generation so a stale task sees a mismatch and bails.
+        self._idle_generation = 0
         self._video_task: asyncio.Task | None = None
         self._session_id: str | None = None
         self._cooldown_until = 0.0
@@ -137,6 +142,7 @@ class ReachyMiniStreamClient:
             if self._idle_handle is not None:
                 self._idle_handle.cancel()
                 self._idle_handle = None
+            self._idle_generation += 1
             if self._task is not None and not self._task.done():
                 return
             loop = asyncio.get_running_loop()
@@ -160,14 +166,21 @@ class ReachyMiniStreamClient:
             self._consumers = max(0, self._consumers - 1)
             if self._consumers > 0 or self._task is None:
                 return
+            if self._idle_handle is not None:
+                self._idle_handle.cancel()
+                self._idle_handle = None
+            self._idle_generation += 1
+            gen = self._idle_generation
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self._idle_timeout,
-                lambda: loop.create_task(self._idle_stop()),
+                lambda: loop.create_task(self._idle_stop(gen)),
             )
 
-    async def _idle_stop(self) -> None:
+    async def _idle_stop(self, gen: int) -> None:
         async with self._lock:
+            if gen != self._idle_generation:
+                return  # superseded by a later release()/acquire()
             self._idle_handle = None
             if self._consumers == 0:
                 await self._stop_session()
@@ -179,6 +192,7 @@ class ReachyMiniStreamClient:
             if self._idle_handle is not None:
                 self._idle_handle.cancel()
                 self._idle_handle = None
+            self._idle_generation += 1
             await self._stop_session()
 
     async def async_get_image(self, timeout: float = 10.0) -> bytes:
