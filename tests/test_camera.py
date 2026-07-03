@@ -59,3 +59,27 @@ async def test_camera_image_none_when_stream_unavailable(
     camera = ReachyMiniCamera(coordinator, config_entry, client)
     assert await camera.async_camera_image() is None
     assert client.releases == 1  # released even on failure
+
+
+async def test_setup_entry_registers_working_unload_callback(
+    hass, coordinator, config_entry
+) -> None:
+    """Unload must hand HA a coroutine, not an already-running Task.
+
+    The double-wrapped variant (a lambda calling async_create_task)
+    makes HA's unload processing raise TypeError and strands the
+    entry in FAILED_UNLOAD.
+    """
+    from custom_components.reachy_mini import camera as camera_platform
+    from custom_components.reachy_mini.const import DOMAIN
+
+    hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = coordinator
+    added: list = []
+
+    def add_entities(entities, update_before_add=False):
+        added.extend(entities)
+
+    await camera_platform.async_setup_entry(hass, config_entry, add_entities)
+    assert len(added) == 1
+    # Raises TypeError with the buggy double-wrapping; must be clean.
+    await config_entry._async_process_on_unload(hass)

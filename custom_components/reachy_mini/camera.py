@@ -40,9 +40,11 @@ async def async_setup_entry(
     client = ReachyMiniStreamClient(
         coordinator.host, session=async_get_clientsession(hass)
     )
-    entry.async_on_unload(
-        lambda: hass.async_create_task(client.async_shutdown())
-    )
+    # The bound coroutine method, called with no args at unload time,
+    # returns a coroutine that HA schedules itself. Do NOT wrap it in
+    # async_create_task: HA would then hand the already-running Task to
+    # asyncio.Task(...) and unload fails with TypeError (FAILED_UNLOAD).
+    entry.async_on_unload(client.async_shutdown)
     async_add_entities([ReachyMiniCamera(coordinator, entry, client)])
 
 
