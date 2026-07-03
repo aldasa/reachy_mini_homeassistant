@@ -10,6 +10,9 @@ instance, polls the robot's daemon every 30 s, and exposes:
   direction (microphone-array DoA),
 - **binary sensors** for awake state, remote-session activity, and
   speech detection,
+- a **camera** with MJPEG live view and JPEG stills, consuming the
+  robot's WebRTC stream server-side (works alongside apps and
+  mobile/desktop remote sessions; no SDK changes),
 - writable **selects** for motor mode (enabled / disabled /
   gravity compensation), emotion, and dance,
 - writable **number sliders** for speaker and microphone volume,
@@ -81,6 +84,12 @@ its stable `unit_id` (a hash of the audio device serial). Underneath:
 | Awake | `power` | True when motors are enabled or in gravity comp |
 | Remote session | `connectivity` | True when a remote client (mobile/desktop app over WebRTC) holds the robot app slot |
 | Speech detected | `sound` | Mic-array VAD signal (LAN-side speech-activity VAD) |
+
+### Camera
+
+| Entity | Notes |
+|---|---|
+| Camera | MJPEG live view (~10 fps) + stills. HA consumes the robot's WebRTC camera producer (`ws://<robot>:8443`) through one shared session; available only while the robot is awake. |
 
 ### Select (writable dropdown)
 
