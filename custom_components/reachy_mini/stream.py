@@ -34,6 +34,7 @@ from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 from aiortc.rtcdtlstransport import RTCCertificate
 from aiortc.sdp import candidate_from_sdp
+from OpenSSL import SSL
 
 from .const import (
     CAMERA_IDLE_TIMEOUT,
@@ -49,7 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 class InteropCertificate(RTCCertificate):
     """RTCCertificate whose DTLS context offers RSA ECDHE suites too."""
 
-    def _create_ssl_context(self, srtp_profiles):  # type: ignore[no-untyped-def]
+    def _create_ssl_context(self, srtp_profiles: list) -> SSL.Context:
         ctx = super()._create_ssl_context(srtp_profiles)
         ctx.set_cipher_list(DTLS_CIPHER_LIST)
         return ctx
@@ -118,6 +119,7 @@ class ReachyMiniStreamClient:
         self._consumers = 0
         self._task: asyncio.Task | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
+        self._idle_task: asyncio.Task | None = None
         # Cancelling the handle alone is not enough: a timer that has
         # already fired has queued an _idle_stop task that can outlive
         # a re-arm and stop the fresh session. Every cancel/re-arm bumps
@@ -174,8 +176,22 @@ class ReachyMiniStreamClient:
             loop = asyncio.get_running_loop()
             self._idle_handle = loop.call_later(
                 self._idle_timeout,
-                lambda: loop.create_task(self._idle_stop(gen)),
+                lambda: self._schedule_idle_stop(gen),
             )
+
+    def _schedule_idle_stop(self, gen: int) -> None:
+        """Create the idle-teardown task and keep a reference to it."""
+        task = asyncio.get_running_loop().create_task(self._idle_stop(gen))
+        self._idle_task = task
+        task.add_done_callback(self._log_idle_task_result)
+
+    @staticmethod
+    def _log_idle_task_result(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _LOGGER.debug("Idle stop task failed: %s", exc, exc_info=exc)
 
     async def _idle_stop(self, gen: int) -> None:
         async with self._lock:
@@ -241,9 +257,6 @@ class ReachyMiniStreamClient:
             ) as ws:
                 try:
                     await self._signalling_loop(ws, pc)
-                except asyncio.CancelledError:
-                    clean_stop = True
-                    raise
                 finally:
                     # Polite teardown mirrors the SDK clients. After a
                     # cancellation this await is allowed to run (and to
@@ -260,15 +273,24 @@ class ReachyMiniStreamClient:
                                 1,
                             )
         except asyncio.CancelledError:
+            # Any cancellation here (including one that lands while
+            # still awaiting ws_connect, before the signalling loop
+            # ever starts) is a deliberate teardown (_stop_session /
+            # async_shutdown), not a robot-side failure — it must not
+            # arm the retry cooldown.
+            clean_stop = True
             raise
         except (aiohttp.ClientError, OSError, ValueError) as err:
             _LOGGER.warning("Reachy Mini camera stream error: %s", err)
         finally:
             if not clean_stop:
                 self._cooldown_until = loop.time() + self._cooldown
-            if self._video_task is not None:
-                self._video_task.cancel()
-                self._video_task = None
+            video_task = self._video_task
+            self._video_task = None
+            if video_task is not None:
+                video_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await video_task
             with contextlib.suppress(Exception):
                 await pc.close()
             self._frame = None

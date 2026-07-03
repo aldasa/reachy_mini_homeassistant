@@ -133,6 +133,10 @@ async def signalling_server(socket_enabled: None):
     script = ServerScript()
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
+        if script.behavior == "stall":
+            # Never prepares the websocket: the client's ws_connect()
+            # await hangs until the caller cancels it.
+            await asyncio.sleep(30)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.send_json({"type": "welcome", "peerId": "consumer-1"})
@@ -393,3 +397,39 @@ async def test_stale_idle_stop_does_not_kill_regranted_session(
     assert not pc.closed  # fresh grace period intact
     await client.async_shutdown()
     await _wait_for(lambda: pc.closed)
+
+
+async def test_cancel_during_connect_is_clean_stop_no_cooldown(
+    signalling_server, http_session
+) -> None:
+    """A stop racing ws_connect must not arm the retry cooldown.
+
+    Only the CancelledError raised around ``_signalling_loop`` used to
+    set ``clean_stop``. A stop/shutdown that cancels the session task
+    while it is still awaiting ``ws_connect`` (before the signalling
+    loop even starts) fell through to the outer handler with
+    ``clean_stop`` still False, arming a spurious cooldown for what was
+    a deliberate teardown.
+    """
+    script, port = signalling_server
+    script.behavior = "stall"
+    stalled_pc = FakePeerConnection()
+    client = _make_client(port, http_session, stalled_pc, cooldown=30.0)
+
+    await client.acquire()
+    await asyncio.sleep(0.05)  # let the task block inside ws_connect
+    await client.async_shutdown()
+
+    assert client._cooldown_until == 0.0  # no cooldown armed by a clean stop
+
+    # A fresh acquire must not fail-fast on a bogus cooldown, and must
+    # actually negotiate a brand new session.
+    script.behavior = "happy"
+    happy_pc = FakePeerConnection()
+    client._pc_factory = lambda: happy_pc
+    await client.acquire()
+    await happy_pc.track.queue.put(make_frame())
+    jpeg = await client.async_get_image(timeout=5)
+    assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
+    await client.async_shutdown()
+    await _wait_for(lambda: happy_pc.closed)
