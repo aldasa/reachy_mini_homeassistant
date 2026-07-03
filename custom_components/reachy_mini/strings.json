@@ -176,6 +176,9 @@
       "restart_daemon": { "name": "Restart daemon" },
       "play_emotion": { "name": "Play emotion" },
       "play_dance": { "name": "Play dance" }
+    },
+    "camera": {
+      "camera": { "name": "Camera" }
     }
   }
 }

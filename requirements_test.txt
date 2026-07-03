@@ -1,2 +1,3 @@
 pytest-homeassistant-custom-component
 aiortc
+PyTurboJPEG==1.8.0
