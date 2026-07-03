@@ -29,6 +29,28 @@ def test_interop_certificate_offers_both_cipher_families() -> None:
     assert "ECDHE-ECDSA-AES128-GCM-SHA256" in ciphers
 
 
+async def test_default_pc_factory_installs_interop_certificate() -> None:
+    """The interop certificate must actually end up on the connection.
+
+    Caught live: aiortc's RTCConfiguration has no `certificates` field,
+    so passing it as a kwarg raised TypeError inside the session task
+    and the RSA-capable DTLS context never applied. Pin the private
+    attribute injection against aiortc upgrades.
+    """
+    from custom_components.reachy_mini.stream import (
+        InteropCertificate,
+        _default_pc_factory,
+    )
+
+    pc = _default_pc_factory()
+    try:
+        certs = pc._RTCPeerConnection__certificates
+        assert len(certs) == 1
+        assert isinstance(certs[0], InteropCertificate)
+    finally:
+        await pc.close()
+
+
 FAKE_OFFER_SDP = (
     "v=0\r\no=- 0 0 IN IP4 172.16.0.170\r\ns=-\r\nt=0 0\r\n"
     "m=video 9 UDP/TLS/RTP/SAVPF 97\r\na=mid:video1\r\n"
