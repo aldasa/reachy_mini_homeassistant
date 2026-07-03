@@ -90,3 +90,33 @@ ENDPOINT_MOVE_PLAY = "/api/move/play/recorded-move-dataset/{dataset}/{move}"
 
 # Service action surfaced under Developer Tools → Services.
 SERVICE_PLAY_RECORDED_MOVE = "play_recorded_move"
+
+# --- Camera / WebRTC stream -------------------------------------------
+# The daemon's webrtcsink runs a gst-webrtc-signalling server on this
+# port; the camera+audio producer is advertised with this meta name
+# (see reachy_mini/media/media_server.py on the SDK side).
+SIGNALLING_PORT = 8443
+PRODUCER_NAME = "reachymini"
+
+# Tear the robot session down this many seconds after the last HA
+# consumer (still image or MJPEG stream) goes away.
+CAMERA_IDLE_TIMEOUT = 10.0
+
+# After the robot side fails or ends the session, don't reconnect for
+# this long — keeps auto-refreshing dashboards from hammering the robot.
+CAMERA_RETRY_COOLDOWN = 5.0
+
+# Live-view frame pacing. 10 fps is sized for a Raspberry Pi 5 host
+# software-decoding 720p30 H264 and JPEG-encoding on demand.
+CAMERA_MJPEG_FPS = 10
+
+# aiortc's default DTLS cipher list is ECDSA-only; the robot's Linux
+# GStreamer build has an RSA DTLS certificate (verified live: Chrome
+# negotiates TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256), while the macOS
+# build generates an ECDSA one — offer both suite families.
+DTLS_CIPHER_LIST = (
+    b"ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+    b"ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:"
+    b"ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+    b"ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA"
+)
