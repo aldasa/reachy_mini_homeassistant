@@ -117,6 +117,7 @@ class ReachyMiniStreamClient:
         self._lock = asyncio.Lock()
         self._consumers = 0
         self._task: asyncio.Task | None = None
+        self._idle_handle: asyncio.TimerHandle | None = None
         self._video_task: asyncio.Task | None = None
         self._session_id: str | None = None
         self._cooldown_until = 0.0
@@ -133,6 +134,9 @@ class ReachyMiniStreamClient:
         """Register a consumer; starts the robot session if needed."""
         async with self._lock:
             self._consumers += 1
+            if self._idle_handle is not None:
+                self._idle_handle.cancel()
+                self._idle_handle = None
             if self._task is not None and not self._task.done():
                 return
             loop = asyncio.get_running_loop()
@@ -147,16 +151,34 @@ class ReachyMiniStreamClient:
             self._task = loop.create_task(self._run_session())
 
     async def release(self) -> None:
-        """Deregister a consumer; stops the session at zero."""
+        """Deregister a consumer; arms idle teardown at zero.
+
+        The grace period keeps snapshot bursts (thumbnail + notification
+        + automation) on one robot session instead of three.
+        """
         async with self._lock:
             self._consumers = max(0, self._consumers - 1)
+            if self._consumers > 0 or self._task is None:
+                return
+            loop = asyncio.get_running_loop()
+            self._idle_handle = loop.call_later(
+                self._idle_timeout,
+                lambda: loop.create_task(self._idle_stop()),
+            )
+
+    async def _idle_stop(self) -> None:
+        async with self._lock:
+            self._idle_handle = None
             if self._consumers == 0:
                 await self._stop_session()
 
     async def async_shutdown(self) -> None:
-        """Tear everything down (config entry unload)."""
+        """Tear everything down immediately (config entry unload)."""
         async with self._lock:
             self._consumers = 0
+            if self._idle_handle is not None:
+                self._idle_handle.cancel()
+                self._idle_handle = None
             await self._stop_session()
 
     async def async_get_image(self, timeout: float = 10.0) -> bytes:

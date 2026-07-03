@@ -328,3 +328,39 @@ async def test_unreachable_robot_raises(socket_enabled: None, http_session) -> N
     with pytest.raises(StreamUnavailableError):
         await client.async_get_image(timeout=5)
     await client.release()
+
+
+async def test_release_keeps_session_for_idle_grace(
+    signalling_server, http_session
+) -> None:
+    _, port = signalling_server
+    pc = FakePeerConnection()
+    client = _make_client(port, http_session, pc, idle_timeout=0.2)
+    await client.acquire()
+    await pc.track.queue.put(make_frame())
+    await client.async_get_image(timeout=5)
+
+    await client.release()
+    await asyncio.sleep(0.05)
+    assert not pc.closed  # still inside the grace period
+    await _wait_for(lambda: pc.closed)  # idle timer fired
+
+
+async def test_reacquire_within_grace_cancels_teardown(
+    signalling_server, http_session
+) -> None:
+    _, port = signalling_server
+    pc = FakePeerConnection()
+    client = _make_client(port, http_session, pc, idle_timeout=0.2)
+    await client.acquire()
+    await pc.track.queue.put(make_frame())
+    await client.async_get_image(timeout=5)
+
+    await client.release()
+    await client.acquire()  # back within the grace period
+    await asyncio.sleep(0.4)
+    assert not pc.closed  # teardown was cancelled
+    jpeg = await client.async_get_image(timeout=5)
+    assert jpeg.startswith(b"\xff\xd8")
+    await client.async_shutdown()
+    await _wait_for(lambda: pc.closed)
