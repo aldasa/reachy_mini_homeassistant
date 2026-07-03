@@ -12,7 +12,7 @@ Its only job is to:
    `/api/daemon/robot-app-lock-status`, `/api/state/doa`,
    `/api/volume/current`, `/api/volume/microphone/current`) and
    assembles a unified state dict — including HA-shaped derivations
-   (`awake`, `active_app_transport`, `webrtc_active`).
+   (`awake`, `active_app_transport`, `remote_session_active`).
 3. Expose that dict as entities across the sensor, binary_sensor,
    number, select, and button platforms, grouped under a single
    Reachy Mini device.

@@ -8,7 +8,7 @@ instance, polls the robot's daemon every 30 s, and exposes:
 
 - read-only **sensors** for active app, app transport, and voice
   direction (microphone-array DoA),
-- **binary sensors** for awake state, WebRTC session activity, and
+- **binary sensors** for awake state, remote-session activity, and
   speech detection,
 - writable **selects** for motor mode (enabled / disabled /
   gravity compensation), emotion, and dance,
@@ -79,7 +79,7 @@ its stable `unit_id` (a hash of the audio device serial). Underneath:
 | Entity | Device class | Notes |
 |---|---|---|
 | Awake | `power` | True when motors are enabled or in gravity comp |
-| WebRTC active | `connectivity` | True when a remote session holds the slot |
+| Remote session | `connectivity` | True when a remote client (mobile/desktop app over WebRTC) holds the robot app slot |
 | Speech detected | `sound` | Mic-array VAD signal (LAN-side speech-activity VAD) |
 
 ### Select (writable dropdown)
@@ -343,7 +343,7 @@ The integration is a thin client over the daemon's existing REST
 surface — no extra protocols, no schema parsing beyond the documented
 fields each endpoint returns. The fan-out coordinator (~80 lines of
 Python) calls five GET endpoints in parallel each poll and does the
-HA-shaping (`awake`, `active_app_transport`, `webrtc_active`,
+HA-shaping (`awake`, `active_app_transport`, `remote_session_active`,
 `active_app`) locally on top of the raw values. Writes POST to the
 same routes the dashboard / SDK clients have always used.
 

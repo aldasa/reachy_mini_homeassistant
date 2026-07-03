@@ -20,8 +20,11 @@ HA marks all entities unavailable, which is the correct UX.
 HA-shaped derivations live here (not in the SDK):
 
 - ``awake`` = motor_mode in {"enabled", "gravity_compensation"}.
-- ``active_app``, ``active_app_transport``, ``webrtc_active`` derived
-  from the app-lock state + holder name.
+- ``active_app``, ``active_app_transport``, ``remote_session_active``
+  derived from the app-lock state + holder name. "Remote session" means
+  a remote client (mobile/desktop app over WebRTC) holds the robot app
+  slot — deliberately not named after WebRTC itself, since camera-feed
+  consumption also uses WebRTC but never takes the slot.
 """
 
 from __future__ import annotations
@@ -76,24 +79,24 @@ def _derive_app_slot(state: str | None, holder: str | None) -> dict[str, Any]:
         return {
             "active_app": holder,
             "active_app_transport": "local",
-            "webrtc_active": False,
+            "remote_session_active": False,
         }
     if state == "remote_session":
         return {
             "active_app": holder,
             "active_app_transport": "webrtc",
-            "webrtc_active": True,
+            "remote_session_active": True,
         }
     if state == "free":
         return {
             "active_app": None,
             "active_app_transport": None,
-            "webrtc_active": False,
+            "remote_session_active": False,
         }
     return {
         "active_app": None,
         "active_app_transport": None,
-        "webrtc_active": None,
+        "remote_session_active": None,
     }
 
 
@@ -202,7 +205,7 @@ class ReachyMiniCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # App slot from /api/daemon/robot-app-lock-status
             "active_app": None,
             "active_app_transport": None,
-            "webrtc_active": None,
+            "remote_session_active": None,
             # DoA from /api/state/doa (null when audio disabled)
             "doa_angle_rad": None,
             "doa_speech_detected": None,

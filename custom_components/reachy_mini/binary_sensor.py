@@ -36,9 +36,9 @@ BINARY_SENSORS: tuple[ReachyMiniBinarySensorDescription, ...] = (
         device_class=BinarySensorDeviceClass.POWER,
     ),
     ReachyMiniBinarySensorDescription(
-        key="webrtc_active",
-        translation_key="webrtc_active",
-        json_key="webrtc_active",
+        key="remote_session",
+        translation_key="remote_session",
+        json_key="remote_session_active",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
     ),
     ReachyMiniBinarySensorDescription(

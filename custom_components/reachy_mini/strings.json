@@ -32,7 +32,7 @@
     },
     "binary_sensor": {
       "awake": { "name": "Awake" },
-      "webrtc_active": { "name": "WebRTC active" },
+      "remote_session": { "name": "Remote session" },
       "speech_detected": { "name": "Speech detected" }
     },
     "number": {
