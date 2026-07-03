@@ -271,3 +271,60 @@ async def test_shutdown_stops_session(signalling_server, http_session) -> None:
     await client.async_get_image(timeout=5)
     await client.async_shutdown()
     await _wait_for(lambda: pc.closed)
+
+
+async def test_no_producer_fails_fast_and_cools_down(
+    signalling_server, http_session
+) -> None:
+    from custom_components.reachy_mini.stream import StreamUnavailableError
+
+    script, port = signalling_server
+    script.behavior = "no_producer"
+    pc = FakePeerConnection()
+    client = _make_client(port, http_session, pc, cooldown=30.0)
+
+    await client.acquire()
+    with pytest.raises(StreamUnavailableError):
+        await client.async_get_image(timeout=5)
+    await client.release()
+
+    # Within the cooldown a new acquire must NOT reconnect...
+    await client.acquire()
+    with pytest.raises(StreamUnavailableError):
+        await client.async_get_image(timeout=1)
+    await client.release()
+    # ...which shows as exactly one `list` request server-side.
+    assert [m["type"] for m in script.received].count("list") == 1
+
+
+async def test_producer_end_session_surfaces_as_unavailable(
+    signalling_server, http_session
+) -> None:
+    from custom_components.reachy_mini.stream import StreamUnavailableError
+
+    script, port = signalling_server
+    script.behavior = "end_session"
+    pc = FakePeerConnection()
+    client = _make_client(port, http_session, pc)
+
+    await client.acquire()
+    with pytest.raises(StreamUnavailableError):
+        await client.async_get_image(timeout=5)
+    await client.release()
+
+
+async def test_unreachable_robot_raises(socket_enabled: None, http_session) -> None:
+    """No signalling server at all (robot off) -> prompt failure."""
+    from custom_components.reachy_mini.stream import (
+        ReachyMiniStreamClient,
+        StreamUnavailableError,
+    )
+
+    client = ReachyMiniStreamClient(
+        "127.0.0.1", session=http_session, port=1,  # nothing listens here
+        pc_factory=FakePeerConnection, idle_timeout=0.05,
+    )
+    await client.acquire()
+    with pytest.raises(StreamUnavailableError):
+        await client.async_get_image(timeout=5)
+    await client.release()
