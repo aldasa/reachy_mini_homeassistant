@@ -1,14 +1,16 @@
 {
   "domain": "reachy_mini",
   "name": "Reachy Mini",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "documentation": "https://github.com/pollen-robotics/reachy_mini_homeassistant",
   "issue_tracker": "https://github.com/pollen-robotics/reachy_mini_homeassistant/issues",
   "codeowners": ["@pollen-robotics"],
   "config_flow": true,
   "integration_type": "device",
   "iot_class": "local_polling",
-  "requirements": ["aiortc>=1.9.0,<2.0"],
+  "requirements": [
+    "aiortc @ https://github.com/pollen-robotics/reachy_mini_homeassistant/releases/download/aiortc-1.14.0-av17/aiortc-1.14.0+av17-py3-none-any.whl"
+  ],
   "dependencies": [],
   "zeroconf": [
     {
