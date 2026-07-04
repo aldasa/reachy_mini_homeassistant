@@ -19,9 +19,9 @@ blueprint:
             - 100
 
 
-    **Requires** `binary_sensor.reachy_mini_speech_detected` and
-    `sensor.reachy_mini_voice_direction` from the Reachy Mini
-    `rest:` block.
+    **Requires** the speech-detected binary sensor and the voice
+    direction sensor created by the Reachy Mini Home Assistant
+    integration.
   domain: automation
   author: Pollen Robotics
   source_url: https://github.com/pollen-robotics/reachy_mini_homeassistant/blob/main/blueprints/automation/reachy_mini/run_with_doa.yaml

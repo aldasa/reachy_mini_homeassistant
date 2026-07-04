@@ -1,0 +1,99 @@
+blueprint:
+  name: "Reachy Mini: Snapshot when spoken to"
+  description: >
+    When the Reachy Mini's microphone array detects sustained speech,
+    grab a snapshot through its camera — a time-stamped photo of
+    whoever is talking to the robot. Optionally run extra actions with
+    the file path available as `snapshot_file` (send it somewhere,
+    feed it to an image-analysis service, ...).
+
+
+    No other device in the house pairs a speech detector with a
+    camera in the same head: this blueprint is the two working
+    together.
+
+
+    The camera only streams while the robot is awake; a condition
+    silently skips the run when it isn't.
+
+
+    **Showcases** the speech-detected binary sensor and the camera
+    entity created by the Reachy Mini Home Assistant integration.
+  domain: automation
+  author: Pollen Robotics
+  source_url: https://github.com/pollen-robotics/reachy_mini_homeassistant/blob/main/blueprints/automation/reachy_mini/snapshot_on_speech.yaml
+  input:
+    speech_entity:
+      name: "Speech-detected binary sensor"
+      selector:
+        entity:
+          filter:
+            - integration: reachy_mini
+              domain: binary_sensor
+    camera_entity:
+      name: "Reachy Mini camera"
+      selector:
+        entity:
+          filter:
+            - integration: reachy_mini
+              domain: camera
+    debounce_seconds:
+      name: "Speech debounce"
+      description: >
+        How long speech must be sustained before the snapshot. Filters
+        out short noises like a cough or door slam.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.5
+          unit_of_measurement: "s"
+    filename_pattern:
+      name: "Snapshot file pattern"
+      description: >
+        Where snapshots are written; rendered per run, so a strftime
+        pattern gives each photo its own time-stamped name. The parent
+        folder must exist and be writable by Home Assistant.
+      default: "/config/www/reachy_mini/speech_{{ now().strftime('%Y%m%d_%H%M%S') }}.jpg"
+      selector:
+        text: {}
+    extra_actions:
+      name: "Extra actions (optional)"
+      description: >
+        Run after the snapshot; the rendered file path is available
+        as `{{ snapshot_file }}`.
+      default: []
+      selector:
+        action: {}
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input speech_entity
+    to: "on"
+    for:
+      seconds: !input debounce_seconds
+
+condition:
+  # The camera exists only while the robot is awake — skip quietly
+  # instead of erroring when it's asleep.
+  - condition: template
+    value_template: >
+      {{ states(camera) not in ['unavailable', 'unknown'] }}
+
+variables:
+  camera: !input camera_entity
+  # The input's strftime template renders here, once per run.
+  snapshot_file: !input filename_pattern
+
+action:
+  - service: camera.snapshot
+    target:
+      entity_id: !input camera_entity
+    data:
+      filename: "{{ snapshot_file }}"
+  - choose: []
+    default: !input extra_actions

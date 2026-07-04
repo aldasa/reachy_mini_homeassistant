@@ -7,8 +7,8 @@ blueprint:
     the radio app, focus mode on a coding assistant, etc.
 
 
-    **Requires** `sensor.reachy_mini_active_app` from the Reachy Mini
-    `rest:` block.
+    **Requires** the active-app sensor created by the Reachy Mini
+    Home Assistant integration.
   domain: automation
   author: Pollen Robotics
   source_url: https://github.com/pollen-robotics/reachy_mini_homeassistant/blob/main/blueprints/automation/reachy_mini/scene_on_app_launch.yaml

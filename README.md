@@ -40,7 +40,13 @@ extra protocols, no broker, no auth.
 2. Add `https://github.com/pollen-robotics/reachy_mini_homeassistant`
    with category **Integration**, then click **Add**.
 3. Find **Reachy Mini** in the HACS list and click **Download**.
-4. Restart Home Assistant.
+4. Restart Home Assistant. The first restart takes a little longer:
+   HA installs the camera's WebRTC dependency (`aiortc`), fetched as a
+   sha256-pinned wheel from this repo's GitHub releases (see the
+   `aiortc-1.14.0-av17` pre-release for why), so the host needs
+   internet access. A failed download shows up in the log as
+   *"Setup failed for custom integration 'reachy_mini':
+   Requirements ... not found"* — restart to retry.
 
 ### Manual install (no HACS)
 
@@ -283,16 +289,6 @@ here will appear in the dropdown using its raw SDK name.
 | ⚔️ The white stripes seven nation army | `the-white-stripes-seven-nation-army` |
 </details>
 
-### Not yet exposed
-
-The SDK doesn't currently expose REST routes for these; they're easy
-additive extensions if anyone wants them:
-
-| Field | Status |
-|---|---|
-| IMU pitch / roll / temperature | Wireless-only sensors. Add a `/api/state/imu` route in the SDK and the integration picks it up. |
-| CPU / memory / uptime | Daemon-process health metrics. Could be added as additive fields to `/api/daemon/status`. |
-
 ## Blueprints
 
 Ready-made automation blueprints ship in the
@@ -314,6 +310,8 @@ then *Import* and *Create automation* in HA.
 | **Daily dance party** | At a scheduled time (with weekday filter), the robot plays a chosen dance. Works with the bundled dances or community music dances. | `reachy_mini.play_recorded_move` | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fpollen-robotics%2Freachy_mini_homeassistant%2Fmain%2Fblueprints%2Fautomation%2Freachy_mini%2Fdaily_dance.yaml) |
 | **Random emotion on trigger** | Picks a move at random from a user-curated comma-separated list each time the trigger fires. Showcases Jinja templating. | `reachy_mini.play_recorded_move` | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fpollen-robotics%2Freachy_mini_homeassistant%2Fmain%2Fblueprints%2Fautomation%2Freachy_mini%2Frandom_emotion_on_trigger.yaml) |
 | **Voice assistant feedback** | When an `assist_satellite.*` entity (or any entity) transitions to a "listening" state, the robot plays `attentive1`. | `reachy_mini.play_recorded_move` | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fpollen-robotics%2Freachy_mini_homeassistant%2Fmain%2Fblueprints%2Fautomation%2Freachy_mini%2Fvoice_assistant_feedback.yaml) |
+| **Photo notification on trigger** | Doorbell, motion, door contact — any trigger takes a snapshot through the robot's camera and sends it as a picture notification to your phone. | Camera entity + `camera.snapshot` | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fpollen-robotics%2Freachy_mini_homeassistant%2Fmain%2Fblueprints%2Fautomation%2Freachy_mini%2Fphoto_notification_on_trigger.yaml) |
+| **Snapshot when spoken to** | Sustained speech at the mic array grabs a time-stamped photo of whoever is talking; optional follow-up actions get the file path. | Camera + speech sensor together | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fpollen-robotics%2Freachy_mini_homeassistant%2Fmain%2Fblueprints%2Fautomation%2Freachy_mini%2Fsnapshot_on_speech.yaml) |
 
 ## Troubleshooting
 
@@ -337,6 +335,13 @@ integration should also work. If not, check the daemon logs.
 
 The daemon backend hasn't finished starting yet (motor configuration
 takes ~5–10 s on first boot). Wait one update interval (30 s).
+
+**The camera is `unavailable` / the live view ended.**
+
+The camera exists only while the robot is awake — the daemon stops its
+WebRTC producer during sleep. Wake the robot and the camera returns on
+the next poll (≤30 s). An MJPEG live view also ends when the robot goes
+to sleep mid-stream; just reopen it after waking.
 
 **Some entities are `unavailable` but others work.**
 
