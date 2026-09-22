@@ -88,8 +88,72 @@ RECORDED_MOVE_DATASETS: tuple[str, ...] = (EMOTIONS_DATASET, DANCES_DATASET)
 ENDPOINT_MOVE_LIST = "/api/move/recorded-move-datasets/list/{dataset}"
 ENDPOINT_MOVE_PLAY = "/api/move/play/recorded-move-dataset/{dataset}/{move}"
 
-# Service action surfaced under Developer Tools → Services.
+# Service actions surfaced under Developer Tools → Services.
 SERVICE_PLAY_RECORDED_MOVE = "play_recorded_move"
+SERVICE_PLAY_AUDIO = "play_audio"
+
+# --- Audio playback (play_audio, route A′) ----------------------------
+# The daemon's remote-sound routes (SDK:
+# reachy_mini/daemon/app/routers/media.py, prefix /media under /api).
+# upload + play_sound are the two play_audio uses; stop_sound and
+# clear_incoming_audio are declared here for the stop/barge-in paths on
+# later phases, media_status for the media_player attributes.
+ENDPOINT_MEDIA_SOUNDS_UPLOAD = "/api/media/sounds/upload"
+ENDPOINT_MEDIA_PLAY_SOUND = "/api/media/play_sound"
+ENDPOINT_MEDIA_STOP_SOUND = "/api/media/stop_sound"
+ENDPOINT_MEDIA_CLEAR_INCOMING_AUDIO = "/api/media/clear_incoming_audio"
+ENDPOINT_MEDIA_STATUS = "/api/media/status"
+
+# The daemon rejects uploads whose extension is outside its allow-list
+# (media.py ALLOWED_SOUND_EXTENSIONS). Mirrored so our own uploads are
+# named legally and a source can be classified before any request.
+ALLOWED_SOUND_EXTENSIONS: tuple[str, ...] = (
+    ".wav",
+    ".mp3",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".flac",
+    ".m4a",
+    ".aac",
+)
+
+# Daemon-side upload cap (media.py MAX_SOUND_UPLOAD_BYTES) applied
+# before its GStreamer discoverer probe. Enforced on our side too, so a
+# doomed payload never leaves the HA host.
+MAX_SOUND_UPLOAD_BYTES = 25 * 1024 * 1024
+
+# Independent cap on what we pull from a URL / media source. Compression
+# makes source size a poor predictor of decoded size, so the fetch is
+# bounded separately from the upload.
+MAX_MEDIA_FETCH_BYTES = 64 * 1024 * 1024
+
+# Upload format: PCM s16 WAV, 16 kHz mono. ~32 kB/s, so even 13 minutes
+# of TTS stays inside the 25 MiB cap, and every GStreamer build decodes
+# it. The daemon resamples to the device; route A would want 48 kHz
+# stereo instead (see DESIGN.md §5.4(c)).
+WAV_SAMPLE_RATE = 16000
+WAV_CHANNELS = 1
+
+# Timeouts. URL fetches can be a TTS round-trip, uploads a few MB.
+MEDIA_FETCH_TIMEOUT = 60.0
+MEDIA_UPLOAD_TIMEOUT = 30.0
+
+# `play_audio` field names.
+ATTR_MEDIA = "media"
+ATTR_TRANSPORT = "transport"
+ATTR_VOLUME = "volume"
+ATTR_KEEPALIVE = "keepalive"
+ATTR_WAIT = "wait"
+
+# Transport selector values (DESIGN.md §5.1 / §5.3).
+TRANSPORT_AUTO = "auto"
+TRANSPORT_REST = "rest"
+TRANSPORT_WEBRTC = "webrtc"
+TRANSPORTS: tuple[str, ...] = (TRANSPORT_AUTO, TRANSPORT_REST, TRANSPORT_WEBRTC)
+
+# Error text for the sleep gate — shared so tests and docs agree.
+ERR_ROBOT_ASLEEP = "wake the robot first"
 
 # --- Camera / WebRTC stream -------------------------------------------
 # The daemon's webrtcsink runs a gst-webrtc-signalling server on this
