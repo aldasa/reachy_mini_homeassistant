@@ -18,7 +18,10 @@ instance, polls the robot's daemon every 30 s, and exposes:
 - writable **number sliders** for speaker and microphone volume,
 - one-shot action **buttons** for wake up, go to sleep, stop/restart
   the running app, play a test sound, restart the daemon, play
-  emotion, and play dance.
+  emotion, and play dance,
+- **`reachy_mini.play_audio`** — plays a file, an `http(s)` URL or a TTS
+  clip (e.g. sanotts speech) on the robot's speaker, with no extra
+  protocol and no app slot needed.
 
 Auto-discovery uses the `_reachy-mini._tcp.local.` mDNS advertisement
 the daemon ships out of the box. Polling fans out to several of the
@@ -146,6 +149,135 @@ For automations and blueprints there's also a global service action,
 `dataset` (HF repo path) and a `move` (string). The dataset can be one
 of the bundled libraries or any custom HF dataset the daemon has
 cached — the daemon validates unknown datasets.
+
+### Audio playback (files, URLs, TTS)
+
+The `reachy_mini.play_audio` service action plays audio on the robot's
+speaker through the daemon's own REST surface (`/api/media/sounds/upload`
+→ `/api/media/play_sound`). It needs no dashboard open, no WebRTC
+session and no app slot, and it works alongside local apps and
+phone/desktop remote sessions.
+
+| Field | Required | Notes |
+|---|---|---|
+| `media` | yes | A `/media/...` path, an `http(s)` URL (e.g. a TTS cache file), or a `media-source://` id — a media picker in the UI, but plain strings work from automations |
+| `transport` | no | `auto` (default) and `rest` play over REST. `webrtc` is reserved for a later phase and currently raises |
+| `volume` | no | 0-100. Sets the speaker volume through `/api/volume/set` just before playing; omit to keep the current volume |
+| `keepalive` / `wait` | no | Reserved for the WebRTC transport; accepted and ignored on REST |
+
+Under the hood the clip is fetched (if it isn't a local file), decoded
+with **PyAV** — in-process, never a shelled-out `ffmpeg`, which HA OS
+doesn't guarantee — re-encoded to 16 kHz mono WAV, uploaded to the
+robot's temp sound directory and played. Any container the daemon can
+decode works (`.wav`, `.mp3`, `.ogg`/`.opus`, `.flac`, `.m4a`, `.aac`);
+the upload is capped at the daemon's 25 MiB limit, and clips go out as
+~32 kB/s of PCM, so even a 13-minute clip fits.
+
+**The robot must be awake.** Its daemon stops the entire media backend
+while asleep, so every media route answers 503 — the service fails fast
+with *"wake the robot first"* instead of letting the call time out.
+
+Direct calls:
+
+```yaml
+# A file from HA's /media folder
+- action: reachy_mini.play_audio
+  target:
+    device_id: 0f1e2d3c4b5a69788796a5b4c3d2e1f0   # your Reachy Mini
+  data:
+    media: /media/ding.wav
+    volume: 60
+
+# Anything Home Assistant can produce TTS for, via HA's TTS media source
+- action: reachy_mini.play_audio
+  target:
+    device_id: 0f1e2d3c4b5a69788796a5b4c3d2e1f0
+  data:
+    media: "media-source://tts/tts.sanotts?message={{ 'Dinner is ready' | urlencode }}"
+```
+
+A reusable script, so any automation can make the robot talk:
+
+```yaml
+script:
+  reachy_announce:
+    fields:
+      message:
+        required: true
+    sequence:
+      - action: reachy_mini.play_audio
+        target:
+          device_id: 0f1e2d3c4b5a69788796a5b4c3d2e1f0
+        data:
+          media: "media-source://tts/tts.sanotts?message={{ message | urlencode }}"
+          volume: 60
+
+automation:
+  - alias: Announce the front door on Reachy
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.front_door
+        to: "on"
+    actions:
+      - action: script.reachy_announce
+        data:
+          message: "Someone's at the front door."
+```
+
+#### sanotts on the LAN
+
+[sanotts](http://192.168.1.96:8880/v1) speaks OpenAI's
+`/v1/audio/speech` shape (model `sanotts`, voice `heart-nano`). If it
+isn't wired into HA as a TTS entity, render the speech to a file first
+and play that file — the audio never leaves the LAN, and the API key
+stays out of the automation (read it from an `input_text` helper, or
+swap in whatever secret mechanism you use):
+
+```yaml
+# configuration.yaml
+shell_command:
+  sanotts_render: >-
+    curl -sS -X POST "http://192.168.1.96:8880/v1/audio/speech"
+    -H "Authorization: Bearer {{ states('input_text.sanotts_tts_key') }}"
+    -H "Content-Type: application/json"
+    -d "{\"model\":\"sanotts\",\"voice\":\"heart-nano\",\"input\":\"{{ message }}\",\"response_format\":\"wav\"}"
+    -o /media/reachy-tts.wav
+
+script:
+  reachy_say_sanotts:
+    fields:
+      message:
+        required: true
+    sequence:
+      - action: shell_command.sanotts_render
+        data:
+          message: "{{ message }}"
+      - action: reachy_mini.play_audio
+        target:
+          device_id: 0f1e2d3c4b5a69788796a5b4c3d2e1f0
+        data:
+          media: /media/reachy-tts.wav
+          volume: 60
+
+automation:
+  - alias: Reachy says good morning
+    triggers:
+      - trigger: time
+        at: "07:30:00"
+    actions:
+      - action: script.reachy_say_sanotts
+        data:
+          message: "Morning, Captain. Parcels are waiting."
+```
+
+> `shell_command` renders its command as a Jinja template with the
+> service data available as variables, which is what `{{ message }}`
+> relies on. Overwriting `reachy-tts.wav` is fine — the robot's own
+> upload copy is content-addressed, so replays don't pile up there.
+
+A `media_player.reachy_mini` entity — so `tts.speak` can target the
+robot directly, with no script in between — and the low-latency WebRTC
+transport are planned for a later phase.
 
 ### Move catalog reference
 
@@ -343,6 +475,25 @@ WebRTC producer during sleep. Wake the robot and the camera returns on
 the next poll (≤30 s). An MJPEG live view also ends when the robot goes
 to sleep mid-stream; just reopen it after waking.
 
+**`reachy_mini.play_audio` says "wake the robot first".**
+
+A sleeping Reachy Mini has its whole media backend stopped, so every
+`/api/media/*` route answers 503 — there is nothing to play into. Wake
+the robot (`button.<robot>_wake_up`) and retry, or guard the automation
+with a condition on `binary_sensor.<robot>_awake`. If the robot *is*
+awake and it still refuses, the daemon may still be starting up (motor
+configuration takes ~5-10 s on first boot); retry once the next poll
+picks up `daemon_state: running`.
+
+**`play_audio` uploads but nothing is audible.**
+
+Check the robot's speaker volume (`number.<robot>_speaker_volume`) —
+`play_audio` leaves it untouched unless you pass `volume`. Also note
+the daemon plays one sound at a time: a new `play_sound` replaces any
+previous `playbin`, so a second utterance cuts the first one off
+(`play_audio` serialises calls per robot, but a `play_recorded_move` or
+an app playing audio sits outside that lock).
+
 **Some entities are `unavailable` but others work.**
 
 By design — the integration fans out across several SDK endpoints in
@@ -364,6 +515,14 @@ same routes the dashboard / SDK clients have always used.
 That means upgrading the daemon to a newer release rarely requires
 upgrading the integration too — only renames or removals of the
 specific routes the integration calls would break it.
+
+`play_audio` follows the same rule: it posts to the daemon's existing
+media routes and adds no new requirement to `manifest.json`. The only
+processing it does on the HA side is re-encoding the clip to WAV —
+PyAV (`av`), which the camera's aiortc dependency already brings in — in
+a worker thread, never a shelled-out `ffmpeg`, because HA OS guarantees
+no such binary. The daemon's own GStreamer stack does the rest, and its
+upload route re-validates the payload before anything is played.
 
 ## License
 
