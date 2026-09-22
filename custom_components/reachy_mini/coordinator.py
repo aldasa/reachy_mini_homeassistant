@@ -48,11 +48,13 @@ from .const import (
     DOMAIN,
     ENDPOINT_APP_LOCK,
     ENDPOINT_DOA,
+    ENDPOINT_MEDIA_SOUNDS_UPLOAD,
     ENDPOINT_MOVE_LIST,
     ENDPOINT_MOVE_PLAY,
     ENDPOINT_STATUS,
     ENDPOINT_VOLUME_MIC,
     ENDPOINT_VOLUME_SPEAKER,
+    MEDIA_UPLOAD_TIMEOUT,
     RECORDED_MOVE_DATASETS,
 )
 
@@ -177,6 +179,55 @@ class ReachyMiniCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Reachy Mini POST %s failed: %s", path, err)
             raise
         await self.async_request_refresh()
+
+    async def async_upload_sound(
+        self, data: bytes, *, filename: str, content_type: str = "audio/wav"
+    ) -> str:
+        """Upload a sound file to the daemon's temp sound directory.
+
+        Multipart ``POST /api/media/sounds/upload`` — the route the SDK's
+        own WebRTC client uses for remote playback. The daemon saves the
+        file under ``/tmp/reachy_mini_sounds/<filename>``, where a later
+        ``POST /api/media/play_sound`` resolves it by name.
+
+        Args:
+            data: File bytes. The daemon validates the content with a
+                GStreamer discoverer probe, so this must be real audio;
+                ``play_audio`` always hands it PCM s16 WAV.
+            filename: Basename to store, extension allow-listed. Reusing
+                one name overwrites, which is how repeated TTS replies
+                avoid filling the robot's temp dir.
+            content_type: MIME type to declare for the part.
+
+        Returns:
+            The absolute path the daemon reported. Falls back to the
+            basename when the response omits ``path`` — ``play_sound``
+            resolves bare basenames from the same directory anyway.
+
+        Raises:
+            aiohttp.ClientError: on a transport error or a non-2xx
+                response (503 when the backend is not running).
+
+        """
+        url = f"{self.base_url}{ENDPOINT_MEDIA_SOUNDS_UPLOAD}"
+        form = aiohttp.FormData()
+        form.add_field(
+            "file", data, filename=filename, content_type=content_type
+        )
+        try:
+            async with self._session.post(
+                url,
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=MEDIA_UPLOAD_TIMEOUT),
+            ) as resp:
+                resp.raise_for_status()
+                payload = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.warning("Reachy Mini sound upload failed: %s", err)
+            raise
+
+        path = payload.get("path") if isinstance(payload, dict) else None
+        return path if isinstance(path, str) and path else filename
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll all endpoints in parallel and assemble the unified dict."""

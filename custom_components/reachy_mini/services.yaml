@@ -25,3 +25,72 @@ play_recorded_move:
       example: happy
       selector:
         text:
+
+play_audio:
+  name: Play audio
+  description: >-
+    Play audio on a Reachy Mini's speaker. `media` accepts a /media path,
+    an http(s) URL (e.g. a TTS cache file), or a media-source id; the
+    clip is decoded and re-encoded to WAV on the Home Assistant host,
+    uploaded to the robot, then played. The robot must be awake — its
+    daemon stops the media backend while asleep.
+  target:
+    entity:
+      integration: reachy_mini
+    device:
+      integration: reachy_mini
+  fields:
+    media:
+      name: Media
+      description: >-
+        Audio to play: a /media path, an http(s) URL (e.g. a TTS cache
+        file), or a media-source id. Any container the daemon can decode
+        is accepted (wav, mp3, ogg/opus, flac, m4a, aac); it is
+        re-encoded to 16 kHz mono WAV before upload.
+      required: true
+      example: /media/ding.wav
+      selector:
+        media:
+          accept:
+            - audio/*
+    transport:
+      name: Transport
+      description: >-
+        How to deliver the audio. `auto` uses REST unless live PCM is
+        supplied; `rest` forces upload + play_sound; `webrtc`
+        (low-latency uplink) is not implemented in this build.
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - rest
+            - webrtc
+    volume:
+      name: Volume override (0-100)
+      description: >-
+        Set the robot's speaker volume through /api/volume/set just
+        before playing. Omit to leave the current volume alone.
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    keepalive:
+      name: Keep session warm until the utterance ends
+      description: >-
+        Reserved for the WebRTC transport (sends silence between frames
+        so the robot's playback chain never goes cold). Accepted and
+        ignored on the REST transport.
+      default: true
+      selector:
+        boolean:
+    wait:
+      name: Wait for completion
+      description: >-
+        Reserved for the WebRTC transport (block until the utterance has
+        finished streaming). Accepted and ignored on the REST transport,
+        which returns once playback has started.
+      default: true
+      selector:
+        boolean:

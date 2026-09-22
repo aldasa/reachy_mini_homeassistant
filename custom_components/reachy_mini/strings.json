@@ -180,5 +180,33 @@
     "camera": {
       "camera": { "name": "Camera" }
     }
-  }
+  },
+    "services": {
+      "play_audio": {
+        "name": "Play audio",
+        "description": "Play a file, URL or TTS clip on a Reachy Mini's speaker (the robot must be awake).",
+        "fields": {
+          "media": {
+            "name": "Media",
+            "description": "Audio to play: a /media path, an http(s) URL, or a media-source id."
+          },
+          "transport": {
+            "name": "Transport",
+            "description": "auto/rest play over REST; webrtc (low-latency uplink) is not implemented in this build."
+          },
+          "volume": {
+            "name": "Volume override (0-100)",
+            "description": "Set the speaker volume just before playing; omit to keep the current volume."
+          },
+          "keepalive": {
+            "name": "Keep session warm",
+            "description": "Reserved for the WebRTC transport; accepted and ignored on REST."
+          },
+          "wait": {
+            "name": "Wait for completion",
+            "description": "Reserved for the WebRTC transport; accepted and ignored on REST."
+          }
+        }
+      }
+    }
 }
