@@ -226,7 +226,8 @@ automation:
 
 #### sanotts on the LAN
 
-[sanotts](http://192.168.1.96:8880/v1) speaks OpenAI's
+A `sanotts` (or any OpenAI-compatible TTS) server on your LAN
+(`http://<sanotts-host>:8880/v1`) speaks OpenAI's
 `/v1/audio/speech` shape (model `sanotts`, voice `heart-nano`). If it
 isn't wired into HA as a TTS entity, render the speech to a file first
 and play that file — the audio never leaves the LAN, and the API key
@@ -237,7 +238,7 @@ swap in whatever secret mechanism you use):
 # configuration.yaml
 shell_command:
   sanotts_render: >-
-    curl -sS -X POST "http://192.168.1.96:8880/v1/audio/speech"
+    curl -sS -X POST "http://<sanotts-host>:8880/v1/audio/speech"
     -H "Authorization: Bearer {{ states('input_text.sanotts_tts_key') }}"
     -H "Content-Type: application/json"
     -d "{\"model\":\"sanotts\",\"voice\":\"heart-nano\",\"input\":\"{{ message }}\",\"response_format\":\"wav\"}"
@@ -258,6 +259,8 @@ script:
         data:
           media: /media/reachy-tts.wav
           volume: 60
+# note: replace the example device_id with your own (Settings →
+# Devices & Services → Reachy Mini → copy Device ID)
 
 automation:
   - alias: Reachy says good morning

@@ -550,7 +550,7 @@ automation. Browse support (stretch²) can list `/api/media/sounds` via
 
 ## 7. Test plan (real hardware, 3 steps)
 
-HA at `https://homeassistant.lan:8443`, integration under the HACS path
+your HA instance, integration under the HACS path
 `custom_components/reachy_mini/`.
 
 **Step 1 — Wake + REST utterance (proves A′ end-to-end, isolates transport).**
