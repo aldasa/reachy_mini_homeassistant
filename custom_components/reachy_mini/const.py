@@ -174,6 +174,58 @@ CAMERA_RETRY_COOLDOWN = 5.0
 # software-decoding 720p30 H264 and JPEG-encoding on demand.
 CAMERA_MJPEG_FPS = 10
 
+# --- Microphone stream (audio-only WebRTC tap) ------------------------
+# The robot's single gst-webrtcsink producer carries camera *and* mic
+# (one `meta.name`), so the mic listener talks to the same signalling
+# endpoint as the camera — but with its own session and lifetime.
+
+# Downstream PCM format on the gateway side (WAKEWORD-PLAN.md §1): the
+# detector wants a fixed 16 kHz mono stream regardless of what Opus
+# negotiated robot-side.
+MIC_SAMPLE_RATE = WAV_SAMPLE_RATE  # 16000
+MIC_CHANNELS = WAV_CHANNELS  # 1
+MIC_SAMPLE_WIDTH = 2  # s16
+
+# Opus packet duration the daemon's webrtcsink uses (20 ms). Only used
+# to compute expected-frame counts and to spot capture gaps.
+MIC_FRAME_MS = 20
+
+# Reconnect backoff. Unlike the camera's retry cooldown (which exists to
+# stop dashboards hammering a broken robot) the listener is *always on*,
+# so it retries forever: fast at first, capped at 30 s, jittered so a
+# robot that reboots does not synchronise every HA restart into one
+# thundering reconnect.
+MIC_RECONNECT_INITIAL = 1.0
+MIC_RECONNECT_MAX = 30.0
+MIC_RECONNECT_FACTOR = 2.0
+MIC_RECONNECT_JITTER = 0.3
+
+# How often the daemon-state gate is re-read while the session is up, and
+# how long the supervisor sleeps between checks while it is closed.
+MIC_GATE_POLL_INTERVAL = 1.0
+
+# Two consecutive audio frames further apart than this many frame
+# durations are recorded as a capture gap (jitter allowance).
+MIC_GAP_TOLERANCE = 1.5
+
+# Direction used for the video m-line in our answer.
+#
+# The intent is "do not have the CM4 encode video for a mic listener"
+# (WAKEWORD-PLAN.md §4 risk 2) — but ``inactive`` cannot be used to say
+# it. The robot's offer is BUNDLE (``a=group:BUNDLE video0 audio1
+# application2``) and ``video0`` *is* the bundle transport m-line: an
+# inactive one never starts ICE, so the producer sits in
+# ``have-local-offer`` until its 12 s watchdog gives up and the session
+# dies with no media at all (measured on daemon 1.10.0, 2026-09-23).
+# ``sendonly`` keeps that m-line — and the shared transport — active
+# while declining to receive video. Measured against ``recvonly``
+# (aiortc's implicit default, which makes the CM4 encode): 0 video
+# frames received over 25 s vs 741, identical audio yield, control loop
+# unchanged. ``MIC_VIDEO_DIRECTION_RECEIVE`` is the fallback if a future
+# robot build refuses ``sendonly``.
+MIC_VIDEO_DIRECTION = "sendonly"
+MIC_VIDEO_DIRECTION_RECEIVE = "recvonly"
+
 # aiortc's default DTLS cipher list is ECDSA-only; the robot's Linux
 # GStreamer build has an RSA DTLS certificate (verified live: Chrome
 # negotiates TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256), while the macOS
