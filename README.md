@@ -1,6 +1,14 @@
-# Reachy Mini Home Assistant integration
+# Reachy Mini Home Assistant integration — Clove fork
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
+
+> **Fork** of the official [pollen-robotics/reachy_mini_homeassistant](https://github.com/pollen-robotics/reachy_mini_homeassistant) (Pollen Robotics, Apache-2.0). Upstream is mirrored on `main`; **this fork lives on the default branch, `feature/play-audio`**, which is what HACS installs.
+>
+> **What the fork adds** — one thing, live-tested end-to-end:
+>
+> - **`reachy_mini.play_audio`** — play any audio through the robot's speaker from Home Assistant: a `/media/` path, an `http(s)` URL, or a media-source id (e.g. `media-source://tts/…` from `tts.speak` or a shell-rendered sanotts clip). HA decodes and re-encodes to 16 kHz WAV on the host, uploads it via the daemon's own REST routes, and plays it — awake-gated, per-robot serialized, optional volume override. No app slot, no extra protocol, no daemon changes. Usage examples below; full feasibility study + build notes in [`fork-notes/`](fork-notes/).
+>
+> Everything else in this README is upstream's and still accurate.
 
 Adds a [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) to Home
 Assistant with **zero YAML**. Drops a "Reachy Mini" device into your HA
