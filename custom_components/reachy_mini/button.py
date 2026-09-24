@@ -32,6 +32,7 @@ from .const import (
     ENDPOINT_DAEMON_START_WAKE,
     ENDPOINT_DAEMON_STOP_SLEEP,
     ENDPOINT_MOTOR_SET_MODE,
+    ENDPOINT_MOVE_GOTO_SLEEP,
     ENDPOINT_MOVE_WAKE_UP,
     ENDPOINT_VOLUME_TEST_SOUND,
 )
@@ -56,6 +57,21 @@ GOTO_SLEEP_DESCRIPTION = ButtonEntityDescription(
     key="goto_sleep",
     translation_key="goto_sleep",
     icon="mdi:sleep",
+)
+
+# Light sleep: pose-only, daemon and media stack left running. Separate
+# entities from the deep-sleep pair above on purpose (WAKEWORD-PLAN.md
+# P2a) — the deep pair is the safety/update path and must stay as-is.
+LIGHT_SLEEP_DESCRIPTION = ButtonEntityDescription(
+    key="light_sleep",
+    translation_key="light_sleep",
+    icon="mdi:power-sleep",
+)
+
+LIGHT_WAKE_DESCRIPTION = ButtonEntityDescription(
+    key="light_wake",
+    translation_key="light_wake",
+    icon="mdi:power",
 )
 
 BUTTONS: tuple[ReachyMiniButtonDescription, ...] = (
@@ -123,6 +139,8 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = [
         ReachyMiniWakeUpButton(coordinator, entry),
         ReachyMiniGotoSleepButton(coordinator, entry),
+        ReachyMiniLightSleepButton(coordinator, entry),
+        ReachyMiniLightWakeButton(coordinator, entry),
         *(ReachyMiniButton(coordinator, entry, desc) for desc in BUTTONS),
     ]
     for description in PLAY_MOVE_BUTTONS:
@@ -217,6 +235,85 @@ class ReachyMiniGotoSleepButton(ReachyMiniEntity, ButtonEntity):
                 "Reachy Mini is already asleep (daemon backend stopped)"
             )
         await self.coordinator.async_post(ENDPOINT_DAEMON_STOP_SLEEP)
+
+
+class ReachyMiniLightSleepButton(ReachyMiniEntity, ButtonEntity):
+    """Pose-only sleep that leaves the daemon (and the mic) running.
+
+    Deliberately not the "Go to sleep" button. That one is the deep
+    sleep path: it stops the daemon backend, which takes the media
+    server and the :8443 signalling server with it and leaves the robot
+    deaf until it is woken again. This one plays the SDK's own pose-only
+    sleep move, so the head goes down and the daemon cuts torque at the
+    end of the trajectory, while the backend, the media server and the
+    mic keep running — the robot dozes but is still listening.
+
+    The media stack is not touched here by design: no daemon stop, no
+    ``/api/media/release``. Guarded on a running daemon because every
+    ``/api/move/*`` and ``/api/motors/*`` route answers 503 once the
+    backend is stopped; from there the deep "Wake up" button owns it.
+    """
+
+    entity_description = LIGHT_SLEEP_DESCRIPTION
+
+    def __init__(
+        self,
+        coordinator: ReachyMiniCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Wire the button to the coordinator."""
+        super().__init__(coordinator, entry, LIGHT_SLEEP_DESCRIPTION.key)
+
+    async def async_press(self) -> None:
+        """Enable torque, then play the pose-only sleep move."""
+        data = self.coordinator.data or {}
+        if data.get("daemon_state") != DAEMON_STATE_RUNNING:
+            raise HomeAssistantError(
+                "Reachy Mini is in deep sleep (daemon backend stopped) — "
+                "press Wake up first"
+            )
+        # The sleep move is a position trajectory, so torque has to be on
+        # for the head to travel. Enabling is idempotent, and it pins the
+        # targets to the measured pose before anything moves, so a robot
+        # left limp (a previous light sleep, or a crashed app) is picked
+        # up without a jump — the same argument the SDK's own
+        # reset_to_sleep makes.
+        await self.coordinator.async_post(
+            ENDPOINT_MOTOR_SET_MODE.format(mode="enabled")
+        )
+        await self.coordinator.async_post(ENDPOINT_MOVE_GOTO_SLEEP)
+
+
+class ReachyMiniLightWakeButton(ReachyMiniEntity, ButtonEntity):
+    """Wake from light sleep, where the daemon never stopped.
+
+    Nothing needs restarting: enable torque (the sleep move cut it) and
+    play the wake move. The daemon-start path stays with the "Wake up"
+    button, which owns the deep-sleep case.
+    """
+
+    entity_description = LIGHT_WAKE_DESCRIPTION
+
+    def __init__(
+        self,
+        coordinator: ReachyMiniCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Wire the button to the coordinator."""
+        super().__init__(coordinator, entry, LIGHT_WAKE_DESCRIPTION.key)
+
+    async def async_press(self) -> None:
+        """Restore motor torque, then play the wake move."""
+        data = self.coordinator.data or {}
+        if data.get("daemon_state") != DAEMON_STATE_RUNNING:
+            raise HomeAssistantError(
+                "Reachy Mini is in deep sleep (daemon backend stopped) — "
+                "press Wake up to start it"
+            )
+        await self.coordinator.async_post(
+            ENDPOINT_MOTOR_SET_MODE.format(mode="enabled")
+        )
+        await self.coordinator.async_post(ENDPOINT_MOVE_WAKE_UP)
 
 
 class ReachyMiniPlayMoveButton(ReachyMiniEntity, ButtonEntity):

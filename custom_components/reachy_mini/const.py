@@ -30,7 +30,20 @@ ENDPOINT_VOLUME_MIC_SET = "/api/volume/microphone/set"
 ENDPOINT_MOTOR_SET_MODE = "/api/motors/set_mode/{mode}"  # path-templated
 ENDPOINT_MOVE_WAKE_UP = "/api/move/play/wake_up"
 
-# Daemon lifecycle endpoints — the canonical wake/sleep on the
+# Pose-only sleep ("light sleep"). This is the SDK's own sleep move
+# (`Backend.goto_sleep()`): head and antennas travel to the sleep pose
+# and the daemon cuts motor torque at the end of the trajectory, but the
+# backend, the media server and the :8443 signalling server all keep
+# running — so the mic stays hot and a wake word is still audible.
+# Deliberately distinct from ENDPOINT_DAEMON_STOP_SLEEP, which stops the
+# backend and takes the media stack (and the robot's hearing) with it.
+# Verified live against daemon 1.10.0: after this POST the head rested
+# limp at the sleep pose (z -0.046 m, pitch 27 degrees,
+# motor_control_mode "disabled") while /api/daemon/status kept reporting
+# "running" and /api/media/status kept reporting available.
+ENDPOINT_MOVE_GOTO_SLEEP = "/api/move/play/goto_sleep"
+
+# Daemon lifecycle endpoints — the deep wake/sleep on the
 # Wireless unit, where "asleep" means the backend is fully stopped
 # and every /api/motors/* and /api/move/* route returns 503. Mirrors
 # the official dashboard (dashboard/static/js/daemon.js). The start

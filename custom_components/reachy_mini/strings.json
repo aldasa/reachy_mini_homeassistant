@@ -170,6 +170,8 @@
     "button": {
       "wake_up": { "name": "Wake up" },
       "goto_sleep": { "name": "Go to sleep" },
+      "light_sleep": { "name": "Light sleep" },
+      "light_wake": { "name": "Light wake" },
       "stop_current_app": { "name": "Stop current app" },
       "restart_current_app": { "name": "Restart current app" },
       "play_test_sound": { "name": "Play test sound" },
