@@ -623,3 +623,67 @@ def test_to_wav_s16_rejects_non_audio() -> None:
 async def test_read_media_rejects_a_missing_local_file(hass) -> None:
     with pytest.raises(ServiceValidationError, match="no such local media file"):
         await read_media(hass, "/media/does-not-exist.wav")
+
+
+async def test_read_media_serves_tts_proxy_references_from_the_disk_cache(
+    hass, tmp_path
+) -> None:
+    """A proxy token the TTS manager knows is read off disk — both in
+    the relative form media_source resolves to and as a full URL — so
+    play_audio never HTTPS-fetches its own instance (issue #6).
+    """
+    from types import SimpleNamespace
+
+    (tmp_path / "cached.mp3").write_bytes(b"cached-audio-bytes")
+    hass.data["tts_manager"] = SimpleNamespace(
+        cache_dir=str(tmp_path), token_to_filename={"tok123.mp3": "cached.mp3"}
+    )
+
+    assert (
+        await read_media(hass, "/api/tts_proxy/tok123.mp3") == b"cached-audio-bytes"
+    )
+    assert (
+        await read_media(
+            hass, "https://homeassistant.lan:8443/api/tts_proxy/tok123.mp3"
+        )
+        == b"cached-audio-bytes"
+    )
+
+
+async def test_read_media_tts_proxy_unknown_token_keeps_the_fetch_path(
+    hass, aioclient_mock
+) -> None:
+    """An unknown or evicted token behaves exactly as before: fetch."""
+    from types import SimpleNamespace
+
+    hass.data["tts_manager"] = SimpleNamespace(
+        cache_dir="/nonexistent", token_to_filename={}
+    )
+    aioclient_mock.get(
+        "https://homeassistant.lan:8443/api/tts_proxy/ghost.mp3", content=b"fetched"
+    )
+
+    assert (
+        await read_media(
+            hass, "https://homeassistant.lan:8443/api/tts_proxy/ghost.mp3"
+        )
+        == b"fetched"
+    )
+
+
+async def test_read_media_tts_proxy_rejects_cache_dir_escape(
+    hass, tmp_path
+) -> None:
+    """A poisoned filename never escapes the cache directory."""
+    from types import SimpleNamespace
+
+    outside = tmp_path.parent / "outside.mp3"
+    outside.write_bytes(b"do-not-read-me")
+    cache = tmp_path / "tts"
+    cache.mkdir()
+    hass.data["tts_manager"] = SimpleNamespace(
+        cache_dir=str(cache), token_to_filename={"sneaky.mp3": "../outside.mp3"}
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await read_media(hass, "/api/tts_proxy/sneaky.mp3")

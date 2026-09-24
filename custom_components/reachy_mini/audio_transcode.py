@@ -61,6 +61,12 @@ FETCHABLE_SCHEMES: tuple[str, ...] = ("http", "https")
 # Media-source ids and HA-relative web paths.
 MEDIA_SOURCE_SCHEME = "media-source"
 
+# Home Assistant's own TTS proxy path. Rendered audio also lives as a
+# plain file in the TTS cache directory, so a reference resolving to
+# this path is served from disk rather than fetched back over HTTPS
+# from ourselves — which self-signed internal URLs cannot survive.
+TTS_PROXY_PREFIX = "/api/tts_proxy/"
+
 _READ_CHUNK = 1 << 16
 
 
@@ -362,6 +368,38 @@ def _absolute_ha_url(hass: HomeAssistant, path: str) -> str | None:
     return None
 
 
+def _tts_proxy_local_path(hass: HomeAssistant, reference: str) -> str | None:
+    """Map a ``/api/tts_proxy/<token>`` reference to its cached file.
+
+    Returns ``None`` whenever the shortcut does not apply — not a proxy
+    path, the TTS integration is not loaded, or the token is unknown or
+    evicted — leaving callers on the existing fetch/read path. The
+    shortcut can therefore only ever resolve a reference that would
+    otherwise need a self-HTTP round trip.
+    """
+    path = urlsplit(reference).path if "://" in reference else reference
+    if not path.startswith(TTS_PROXY_PREFIX):
+        return None
+    token = path.removeprefix(TTS_PROXY_PREFIX)
+    if not token or "/" in token or ".." in token:
+        return None
+    # DATA_TTS_MANAGER is a HassKey — a str subclass — so the plain
+    # name matches without importing the tts component (whose package
+    # pulls in mutagen, absent from slim test environments).
+    manager = hass.data.get("tts_manager")
+    if manager is None:
+        return None
+    filename = getattr(manager, "token_to_filename", {}).get(token)
+    cache_dir = getattr(manager, "cache_dir", "")
+    if not filename or not cache_dir:
+        return None
+    root = os.path.abspath(cache_dir)
+    candidate = os.path.abspath(os.path.join(root, filename))
+    if not candidate.startswith(root + os.sep) or not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
 async def read_media(hass: HomeAssistant, media: str) -> bytes:
     """Resolve a ``play_audio`` ``media`` reference to raw bytes.
 
@@ -373,7 +411,8 @@ async def read_media(hass: HomeAssistant, media: str) -> bytes:
     * a path — ``/media/ding.wav``, ``/local/ding.wav``, an absolute
       path on the HA host, or a path relative to the config dir. A path
       that is not a readable local file is retried against HA's own
-      internal URL, which is how TTS proxy URLs resolve.
+      internal URL, which is how TTS proxy URLs resolve. Proxy paths
+      whose token is in the TTS cache are served from disk directly.
 
     Raises:
         AudioSourceError: for an empty reference, an unsupported
@@ -391,12 +430,19 @@ async def read_media(hass: HomeAssistant, media: str) -> bytes:
         scheme = urlsplit(reference).scheme
 
     if scheme in FETCHABLE_SCHEMES:
+        local = _tts_proxy_local_path(hass, reference)
+        if local is not None:
+            return await _read_local(hass, local)
         return await fetch_bytes(hass, reference)
     if scheme:
         raise AudioSourceError(
             f"unsupported media reference '{media}' — use an http(s) URL, a "
             "/media path, or a media-source:// id"
         )
+
+    local = _tts_proxy_local_path(hass, reference)
+    if local is not None:
+        return await _read_local(hass, local)
 
     try:
         return await _read_local(hass, _resolve_local_path(hass, reference))
