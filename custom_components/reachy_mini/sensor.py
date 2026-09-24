@@ -54,6 +54,12 @@ SENSORS: tuple[ReachyMiniSensorDescription, ...] = (
         icon="mdi:account-voice",
         suggested_display_precision=2,
     ),
+    ReachyMiniSensorDescription(
+        key="sleep_state",
+        translation_key="sleep_state",
+        json_key="sleep_state",
+        icon="mdi:power-sleep",
+    ),
 )
 
 

@@ -28,7 +28,8 @@
     "sensor": {
       "active_app": { "name": "Active app" },
       "active_app_transport": { "name": "Active app transport" },
-      "voice_direction": { "name": "Voice direction" }
+      "voice_direction": { "name": "Voice direction" },
+      "sleep_state": { "name": "Sleep state" }
     },
     "binary_sensor": {
       "awake": { "name": "Awake" },

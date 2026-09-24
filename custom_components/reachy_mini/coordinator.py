@@ -75,6 +75,27 @@ def _derive_awake(motor_mode: str | None, daemon_state: str | None) -> bool | No
     return motor_mode in ("enabled", "gravity_compensation")
 
 
+def _derive_sleep_state(
+    motor_mode: str | None, daemon_state: str | None
+) -> str | None:
+    """Tri-state sleep view: ``awake`` / ``light_sleep`` / ``deep_sleep``.
+
+    ``binary_sensor.awake`` cannot tell light sleep — motors limp at the
+    sleep pose while the media stack, and therefore the mic, stay hot —
+    from deep sleep, where the backend is stopped and the robot is deaf.
+    Automations gate on "is the ear up"; this exposes the distinction.
+    """
+    if daemon_state is None:
+        return None
+    if daemon_state != DAEMON_STATE_RUNNING:
+        return "deep_sleep"
+    if motor_mode is None:
+        return None
+    if motor_mode == "disabled":
+        return "light_sleep"
+    return "awake"
+
+
 def _derive_app_slot(state: str | None, holder: str | None) -> dict[str, Any]:
     """Expand the raw app-lock fields into HA-shaped values."""
     if state == "local_app":
@@ -253,6 +274,7 @@ class ReachyMiniCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "daemon_state": None,
             "motor_mode": None,
             "awake": None,
+            "sleep_state": None,
             # App slot from /api/daemon/robot-app-lock-status
             "active_app": None,
             "active_app_transport": None,
@@ -275,6 +297,7 @@ class ReachyMiniCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             motor_mode = backend.get("motor_control_mode")
             data["motor_mode"] = motor_mode
             data["awake"] = _derive_awake(motor_mode, daemon_state)
+            data["sleep_state"] = _derive_sleep_state(motor_mode, daemon_state)
 
         if isinstance(app_lock, dict):
             data.update(

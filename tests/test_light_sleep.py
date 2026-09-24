@@ -31,6 +31,7 @@ from custom_components.reachy_mini.const import (
     ENDPOINT_DAEMON_STOP_SLEEP,
     ENDPOINT_MOVE_GOTO_SLEEP,
 )
+from custom_components.reachy_mini.coordinator import _derive_sleep_state
 
 from .conftest import BASE_URL
 
@@ -211,3 +212,23 @@ async def test_light_buttons_are_new_entities_beside_the_deep_pair(
     unique_ids = {entity.unique_id for entity in added}
     assert len(unique_ids) == len(added)
     assert by_key["light_sleep"].unique_id.endswith("_light_sleep")
+
+
+@pytest.mark.parametrize(
+    ("motor_mode", "daemon_state", "expected"),
+    [
+        ("enabled", "running", "awake"),
+        ("gravity_compensation", "running", "awake"),
+        ("disabled", "running", "light_sleep"),
+        ("anything", "stopping", "deep_sleep"),
+        ("anything", "stopped", "deep_sleep"),
+        ("anything", None, None),
+        # Consistent with _derive_awake: a backend that is not (yet)
+        # running is definitively asleep, not unknown — during boot the
+        # robot cannot hear anything, so "deep_sleep" is the truth.
+        (None, "starting", "deep_sleep"),
+    ],
+)
+def test_derive_sleep_state(motor_mode, daemon_state, expected) -> None:
+    """The tri-state sensor must tell light sleep (ear hot) from deep."""
+    assert _derive_sleep_state(motor_mode, daemon_state) == expected
