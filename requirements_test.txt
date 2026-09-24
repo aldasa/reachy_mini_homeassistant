@@ -1,3 +1,9 @@
 pytest-homeassistant-custom-component
 aiortc
 PyTurboJPEG==1.8.0
+# The play_audio TTS tests import homeassistant.components.tts to patch
+# its public audio-out API (async_get_media_source_audio). That module
+# needs mutagen, and pulls homeassistant.components.ffmpeg, which needs
+# ha-ffmpeg. Production HA ships both.
+mutagen
+ha-ffmpeg

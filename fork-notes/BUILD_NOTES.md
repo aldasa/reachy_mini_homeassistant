@@ -31,13 +31,15 @@ deliberate deferral. Nothing here changes the design's conclusions.
    the file's existing style (`ENDPOINT_VOLUME_*`, `ENDPOINT_MOVE_*`).
 
 3. **Media resolution is broader than "URL / media-source".** DESIGN §5.2 asks
-   for URL + media-source; because a `media-source://tts/...` id resolves to a
-   *relative* `/api/tts_proxy/...` URL, `read_media` also maps `/media/...`,
-   `/local/...` and config-relative paths, and — when a relative reference is
-   not a readable local file — fetches it from HA's own
-   `internal_url`/`external_url`. Without that last step the TTS path (the main
-   motivation for the feature) would resolve to a path that does not exist.
-   `file://` is deliberately *not* accepted.
+   for URL + media-source; `read_media` also maps `/media/...`, `/local/...`
+   and config-relative paths, and — when a relative reference is not a
+   readable local file — fetches it from HA's own
+   `internal_url`/`external_url`. `file://` is deliberately *not* accepted.
+   A `media-source://tts/...` id does **not** take that route: it is rendered
+   in process through HA's public audio-out API
+   (`tts.async_get_media_source_audio`), which returns the bytes directly and
+   needs no HTTP round trip to ourselves (fork issue #6). One path per input
+   kind, and a render failure fails hard with the provider's own error text.
 
 4. **`transport: webrtc` raises `ServiceValidationError`** instead of silently
    falling back to REST. DESIGN §5.1 defines the option; this phase cannot

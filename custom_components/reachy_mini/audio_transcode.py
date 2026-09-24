@@ -7,7 +7,10 @@ one:
 1. :func:`read_media` resolves the reference — an ``http(s)`` URL, a
    ``/media/...`` (or other HA-relative) path, a ``media-source://`` id
    — and returns the raw bytes, bounded by
-   :data:`~.const.MAX_MEDIA_FETCH_BYTES`.
+   :data:`~.const.MAX_MEDIA_FETCH_BYTES`. A ``media-source://tts/...``
+   id is *rendered in process* through HA's own audio-out API rather
+   than resolved to a proxy URL and fetched back from this instance
+   (issue #6).
 2. :func:`to_wav_s16` decodes that with PyAV and re-encodes it as PCM
    s16 WAV at 16 kHz mono (:data:`~.const.WAV_SAMPLE_RATE`), the format
    the daemon's upload route accepts and every GStreamer build can play
@@ -61,11 +64,10 @@ FETCHABLE_SCHEMES: tuple[str, ...] = ("http", "https")
 # Media-source ids and HA-relative web paths.
 MEDIA_SOURCE_SCHEME = "media-source"
 
-# Home Assistant's own TTS proxy path. Rendered audio also lives as a
-# plain file in the TTS cache directory, so a reference resolving to
-# this path is served from disk rather than fetched back over HTTPS
-# from ourselves — which self-signed internal URLs cannot survive.
-TTS_PROXY_PREFIX = "/api/tts_proxy/"
+# HA's TTS media-source domain: ids of the form
+# ``media-source://tts/<engine>?message=...``. Only these are rendered
+# in process; every other media-source id resolves as it always did.
+TTS_MEDIA_SOURCE_DOMAIN = "tts"
 
 _READ_CHUNK = 1 << 16
 
@@ -91,6 +93,20 @@ def source_extension(media: str) -> str | None:
     """
     path = urlsplit(media).path or media
     suffix = PurePosixPath(unquote(path)).suffix.lower()
+    return suffix if suffix in ALLOWED_SOUND_EXTENSIONS else None
+
+
+def tts_extension_suffix(extension: str) -> str | None:
+    """Map a TTS render's extension to the allow-listed suffix.
+
+    :func:`tts.async_get_media_source_audio` reports the rendered
+    container without a dot (``"mp3"``). This is the counterpart of
+    :func:`source_extension` for audio HA rendered for us: same
+    allow-list, same rule that an unrecognised value is ``None`` rather
+    than an error — the render is transcoded to WAV regardless, and
+    only the name we upload has to be allow-listed.
+    """
+    suffix = f".{extension.strip().lower().lstrip('.')}"
     return suffix if suffix in ALLOWED_SOUND_EXTENSIONS else None
 
 
@@ -357,8 +373,10 @@ def _absolute_ha_url(hass: HomeAssistant, path: str) -> str | None:
     """Build an absolute URL for a path served by this HA instance.
 
     Used as a fallback when a reference names something HA serves over
-    HTTP rather than a file on disk — ``/api/tts_proxy/<hash>.mp3`` from
-    a ``media-source://tts/...`` resolution, for instance.
+    HTTP rather than a file on disk — a caller handing us
+    ``/api/tts_proxy/<token>.mp3`` directly, for instance. A
+    ``media-source://tts/...`` id never reaches here: it is rendered in
+    process instead.
     """
     if not path.startswith("/") or path.startswith("//"):
         return None
@@ -368,36 +386,47 @@ def _absolute_ha_url(hass: HomeAssistant, path: str) -> str | None:
     return None
 
 
-def _tts_proxy_local_path(hass: HomeAssistant, reference: str) -> str | None:
-    """Map a ``/api/tts_proxy/<token>`` reference to its cached file.
+async def _render_tts_media_source(hass: HomeAssistant, media_id: str) -> bytes:
+    """Render a ``media-source://tts/...`` id to audio bytes, in process.
 
-    Returns ``None`` whenever the shortcut does not apply — not a proxy
-    path, the TTS integration is not loaded, or the token is unknown or
-    evicted — leaving callers on the existing fetch/read path. The
-    shortcut can therefore only ever resolve a reference that would
-    otherwise need a self-HTTP round trip.
+    Calls HA's public audio-out API — the same entry point the assist
+    satellites (voip, esphome, wyoming) use — so a render never has to
+    be fetched back over HTTPS from this instance, which a self-signed
+    internal certificate cannot survive (issue #6).
+
+    The import is deliberately local: ``homeassistant.components.tts``
+    pulls in ``mutagen``, and rendering is the only path that needs it.
+
+    A failure here *is* the answer. The original error text is carried
+    into :class:`AudioSourceError` and nothing is retried over the
+    network — a render that fails must fail hard and say why.
+
+    Raises:
+        AudioSourceError: if HA cannot render the id — unknown engine,
+            no message, a provider error, or empty audio.
+
     """
-    path = urlsplit(reference).path if "://" in reference else reference
-    if not path.startswith(TTS_PROXY_PREFIX):
-        return None
-    token = path.removeprefix(TTS_PROXY_PREFIX)
-    if not token or "/" in token or ".." in token:
-        return None
-    # DATA_TTS_MANAGER is a HassKey — a str subclass — so the plain
-    # name matches without importing the tts component (whose package
-    # pulls in mutagen, absent from slim test environments).
-    manager = hass.data.get("tts_manager")
-    if manager is None:
-        return None
-    filename = getattr(manager, "token_to_filename", {}).get(token)
-    cache_dir = getattr(manager, "cache_dir", "")
-    if not filename or not cache_dir:
-        return None
-    root = os.path.abspath(cache_dir)
-    candidate = os.path.abspath(os.path.join(root, filename))
-    if not candidate.startswith(root + os.sep) or not os.path.isfile(candidate):
-        return None
-    return candidate
+    from homeassistant.components import tts
+
+    try:
+        extension, data = await tts.async_get_media_source_audio(hass, media_id)
+    except Exception as err:  # HA raises several unrelated types here
+        raise AudioSourceError(
+            f"could not render TTS '{media_id}': {err}"
+        ) from err
+
+    if not data:
+        raise AudioSourceError(
+            f"could not render TTS '{media_id}': no audio produced"
+        )
+
+    _LOGGER.debug(
+        "rendered TTS media source %s in process: %s, %s bytes",
+        media_id,
+        tts_extension_suffix(extension) or f".{extension}",
+        len(data),
+    )
+    return data
 
 
 async def read_media(hass: HomeAssistant, media: str) -> bytes:
@@ -405,18 +434,25 @@ async def read_media(hass: HomeAssistant, media: str) -> bytes:
 
     Accepts, in order:
 
-    * a ``media-source://`` id (resolved through HA's media_source,
-      then fetched/read as its target),
+    * a ``media-source://tts/...`` id — rendered in process through
+      HA's own TTS audio API, never fetched back from this instance,
+    * any other ``media-source://`` id (resolved through HA's
+      media_source, then fetched/read as its target),
     * an ``http(s)`` URL — a TTS cache file, for example,
     * a path — ``/media/ding.wav``, ``/local/ding.wav``, an absolute
       path on the HA host, or a path relative to the config dir. A path
       that is not a readable local file is retried against HA's own
-      internal URL, which is how TTS proxy URLs resolve. Proxy paths
-      whose token is in the TTS cache are served from disk directly.
+      internal URL, which is how a proxy URL handed over directly (a
+      relative ``/api/tts_proxy/...`` path, for instance) resolves.
+
+    Each input kind takes exactly one path: there is no fallback
+    ladder, and a TTS render failure is reported as-is rather than
+    retried over the network.
 
     Raises:
         AudioSourceError: for an empty reference, an unsupported
-            scheme, a failed fetch or read, or an oversized payload.
+            scheme, a failed render, fetch or read, or an oversized
+            payload.
 
     """
     reference = (media or "").strip()
@@ -426,23 +462,18 @@ async def read_media(hass: HomeAssistant, media: str) -> bytes:
     scheme = urlsplit(reference).scheme
 
     if scheme == MEDIA_SOURCE_SCHEME:
+        if urlsplit(reference).netloc.lower() == TTS_MEDIA_SOURCE_DOMAIN:
+            return await _render_tts_media_source(hass, reference)
         reference = await _resolve_media_source(hass, reference)
         scheme = urlsplit(reference).scheme
 
     if scheme in FETCHABLE_SCHEMES:
-        local = _tts_proxy_local_path(hass, reference)
-        if local is not None:
-            return await _read_local(hass, local)
         return await fetch_bytes(hass, reference)
     if scheme:
         raise AudioSourceError(
             f"unsupported media reference '{media}' — use an http(s) URL, a "
             "/media path, or a media-source:// id"
         )
-
-    local = _tts_proxy_local_path(hass, reference)
-    if local is not None:
-        return await _read_local(hass, local)
 
     try:
         return await _read_local(hass, _resolve_local_path(hass, reference))

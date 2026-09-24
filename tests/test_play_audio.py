@@ -15,15 +15,17 @@ from __future__ import annotations
 import array
 import asyncio
 import io
+import logging
 import math
 import os
 import re
 import wave
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.setup import async_setup_component
 
@@ -33,6 +35,7 @@ from custom_components.reachy_mini.audio_transcode import (
     read_media,
     source_extension,
     to_wav_s16,
+    tts_extension_suffix,
     upload_filename,
 )
 from custom_components.reachy_mini.const import (
@@ -625,65 +628,171 @@ async def test_read_media_rejects_a_missing_local_file(hass) -> None:
         await read_media(hass, "/media/does-not-exist.wav")
 
 
-async def test_read_media_serves_tts_proxy_references_from_the_disk_cache(
-    hass, tmp_path
-) -> None:
-    """A proxy token the TTS manager knows is read off disk — both in
-    the relative form media_source resolves to and as a full URL — so
-    play_audio never HTTPS-fetches its own instance (issue #6).
-    """
-    from types import SimpleNamespace
+# --------------------------------------------------------------------------
+# TTS media sources (issue #6): rendered in process, never fetched
+# --------------------------------------------------------------------------
 
+# HA's TTS entity hands integrations an id of this shape; the engine name
+# and query parameters come straight from the local TTS config.
+TTS_MEDIA_SOURCE_ID = (
+    "media-source://tts/tts.cloud?message=Hello+captain&language=en-GB"
+)
+
+
+@pytest.mark.parametrize(
+    ("extension", "expected"),
+    [("mp3", ".mp3"), ("WAV", ".wav"), ("opus", ".opus"), ("txt", None), ("", None)],
+)
+def test_tts_extension_suffix_maps_to_the_daemons_allow_list(
+    extension: str, expected: str | None
+) -> None:
+    """HA reports a render's extension without the dot — same allow-list."""
+    assert tts_extension_suffix(extension) == expected
+
+
+async def test_read_media_renders_a_tts_media_source_in_process(
+    hass, caplog
+) -> None:
+    """A ``media-source://tts`` id goes to HA's audio API, not over HTTP.
+
+    This is the issue #6 fix: rendering in process needs no self-signed
+    certificate, and the bytes HA renders are what the service carries
+    on to the transcoder.
+    """
+    rendered = AsyncMock(return_value=("mp3", _wav_bytes(seconds=0.25)))
+
+    with patch(
+        "homeassistant.components.tts.async_get_media_source_audio", rendered
+    ):
+        with caplog.at_level(
+            logging.DEBUG, logger="custom_components.reachy_mini.audio_transcode"
+        ):
+            data = await read_media(hass, TTS_MEDIA_SOURCE_ID)
+
+    # The id is passed through verbatim, and the rendered bytes are the
+    # result — nothing was fetched.
+    assert rendered.await_args.args[1] == TTS_MEDIA_SOURCE_ID
+    assert data == rendered.return_value[1]
+    # The render's own extension is honoured (allow-list semantics),
+    # rather than guessed from the reference.
+    assert ".mp3" in caplog.text
+
+
+async def test_read_media_wraps_a_tts_render_error_with_its_cause(
+    hass,
+) -> None:
+    """A render failure keeps the original error text, verbatim."""
+    from homeassistant.components.media_source.error import Unresolvable
+
+    failing = AsyncMock(side_effect=Unresolvable("No message specified."))
+
+    with patch(
+        "homeassistant.components.tts.async_get_media_source_audio", failing
+    ):
+        with pytest.raises(ServiceValidationError) as err:
+            await read_media(hass, "media-source://tts/tts.cloud")
+
+    message = str(err.value)
+    assert "could not render TTS 'media-source://tts/tts.cloud'" in message
+    assert "No message specified." in message
+
+
+async def test_read_media_still_resolves_non_tts_media_sources(hass) -> None:
+    """Only the tts domain is render-direct; other ids resolve as before."""
+    await async_setup_component(hass, "media_source", {})
+    hass.config.media_dirs.setdefault("local", hass.config.path("media"))
+    _write_media_file(hass, "ding.wav", _wav_bytes(seconds=0.25))
+    must_not_render = AsyncMock(side_effect=AssertionError("tts render consulted"))
+
+    with patch(
+        "homeassistant.components.tts.async_get_media_source_audio", must_not_render
+    ):
+        data = await read_media(hass, "media-source://media_source/local/ding.wav")
+
+    assert data.startswith(b"RIFF")
+    assert not must_not_render.await_count
+
+
+async def test_read_media_does_not_special_case_a_tts_proxy_url(
+    hass, aioclient_mock, tmp_path
+) -> None:
+    """A ``/api/tts_proxy`` URL is a plain URL again — strict fetch, no disk.
+
+    The disk shortcut is gone (issue #6): even a token this instance's
+    TTS cache knows is fetched over the network with normal TLS
+    verification, and the relative form still resolves through HA's own
+    internal URL.
+    """
     (tmp_path / "cached.mp3").write_bytes(b"cached-audio-bytes")
     hass.data["tts_manager"] = SimpleNamespace(
         cache_dir=str(tmp_path), token_to_filename={"tok123.mp3": "cached.mp3"}
     )
-
-    assert (
-        await read_media(hass, "/api/tts_proxy/tok123.mp3") == b"cached-audio-bytes"
+    hass.config.internal_url = "https://homeassistant.lan:8443"
+    aioclient_mock.get(
+        "https://homeassistant.lan:8443/api/tts_proxy/tok123.mp3",
+        content=b"fetched-over-https",
     )
+
     assert (
         await read_media(
             hass, "https://homeassistant.lan:8443/api/tts_proxy/tok123.mp3"
         )
-        == b"cached-audio-bytes"
+        == b"fetched-over-https"
     )
-
-
-async def test_read_media_tts_proxy_unknown_token_keeps_the_fetch_path(
-    hass, aioclient_mock
-) -> None:
-    """An unknown or evicted token behaves exactly as before: fetch."""
-    from types import SimpleNamespace
-
-    hass.data["tts_manager"] = SimpleNamespace(
-        cache_dir="/nonexistent", token_to_filename={}
-    )
-    aioclient_mock.get(
-        "https://homeassistant.lan:8443/api/tts_proxy/ghost.mp3", content=b"fetched"
-    )
-
     assert (
-        await read_media(
-            hass, "https://homeassistant.lan:8443/api/tts_proxy/ghost.mp3"
-        )
-        == b"fetched"
+        await read_media(hass, "/api/tts_proxy/tok123.mp3")
+        == b"fetched-over-https"
     )
 
 
-async def test_read_media_tts_proxy_rejects_cache_dir_escape(
-    hass, tmp_path
+async def test_play_audio_renders_a_tts_media_source(
+    hass, coordinator, config_entry, aioclient_mock
 ) -> None:
-    """A poisoned filename never escapes the cache directory."""
-    from types import SimpleNamespace
+    """End to end: render → transcode → upload → play_sound, no fetch."""
+    device_id = await _awake_target(hass, coordinator, config_entry)
+    _mock_upload_and_play(aioclient_mock)
+    rendered = AsyncMock(return_value=("mp3", _wav_bytes(seconds=0.25)))
 
-    outside = tmp_path.parent / "outside.mp3"
-    outside.write_bytes(b"do-not-read-me")
-    cache = tmp_path / "tts"
-    cache.mkdir()
-    hass.data["tts_manager"] = SimpleNamespace(
-        cache_dir=str(cache), token_to_filename={"sneaky.mp3": "../outside.mp3"}
+    with patch(
+        "homeassistant.components.tts.async_get_media_source_audio", rendered
+    ):
+        await _play_audio(hass, coordinator, device_id, TTS_MEDIA_SOURCE_ID)
+
+    assert rendered.await_count == 1
+    assert rendered.await_args.args[1] == TTS_MEDIA_SOURCE_ID
+    # No GET: the only traffic is the robot's own upload + play_sound.
+    assert [req for req in _requests(aioclient_mock) if req[0] == "GET"] == []
+    assert _post_order(aioclient_mock) == [
+        ENDPOINT_MEDIA_SOUNDS_UPLOAD,
+        ENDPOINT_MEDIA_PLAY_SOUND,
+    ]
+
+    upload = _post_payloads(aioclient_mock, ENDPOINT_MEDIA_SOUNDS_UPLOAD)[0]
+    name, filename, content_type, payload = await _uploaded_part(upload)
+    assert name == "file"
+    assert content_type == "audio/wav"
+    assert re.fullmatch(r"ha_[0-9a-f]{8}\.wav", filename), filename
+    assert payload.startswith(b"RIFF")
+
+
+async def test_play_audio_surfaces_a_tts_render_failure(
+    hass, coordinator, config_entry, aioclient_mock
+) -> None:
+    """A render failure names its cause and is never retried over HTTP."""
+    device_id = await _awake_target(hass, coordinator, config_entry)
+    failing = AsyncMock(
+        side_effect=HomeAssistantError("Provider tts.cloud not found")
     )
 
-    with pytest.raises(ServiceValidationError):
-        await read_media(hass, "/api/tts_proxy/sneaky.mp3")
+    with patch(
+        "homeassistant.components.tts.async_get_media_source_audio", failing
+    ):
+        with pytest.raises(ServiceValidationError) as err:
+            await _play_audio(hass, coordinator, device_id, TTS_MEDIA_SOURCE_ID)
+
+    message = str(err.value)
+    assert "could not render TTS" in message
+    assert TTS_MEDIA_SOURCE_ID in message
+    assert "Provider tts.cloud not found" in message
+    # Fail hard: no fallback fetch, no traffic at all.
+    assert not aioclient_mock.mock_calls
